@@ -1,9 +1,9 @@
 .PHONY: build run dev
 
 build:
-	go build -o out
+	go build
 
 run:
-	./out
+	./chirpy
 
 dev: build run
