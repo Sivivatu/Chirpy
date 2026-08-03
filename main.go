@@ -1,17 +1,24 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync/atomic"
+
+	"sivivatu/Chirpy/chirpy/internal/database"
+
+	_ "github.com/lib/pq"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	dbQuery        *database.Queries
 }
-
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -56,18 +63,43 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	w.Write(dat)
 }
 
+func censorBody(body string) string {
+	words := strings.Split(string(body), " ")
+
+	banned := map[string]struct{}{
+		"kerfuffle": {},
+		"sharbert":  {},
+		"fornax":    {},
+	}
+
+	for i := 0; i < len(words); i++ {
+		loweredWord := strings.ToLower(words[i])
+		if _, ok := banned[loweredWord]; ok {
+			words[i] = "****"
+		}
+	}
+
+	return strings.Join(words, " ")
+}
 
 func main() {
+
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Printf("Error loading database: %s", err)
+	}
+	dbQueries := database.New(db)
+
 	cfg := &apiConfig{
 		fileserverHits: atomic.Int32{},
+		dbQuery:        dbQueries,
 	}
 	mux := http.NewServeMux()
-
 
 	// General web endpoints
 	mux.Handle("/app/", cfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(http.Dir(".")))))
 	mux.Handle("/assets/", cfg.middlewareMetricsInc(http.StripPrefix("/assets/", http.FileServer(http.Dir(".")))))
-
 
 	// Admin Endpoints
 	mux.HandleFunc("GET /admin/metrics", func(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +118,7 @@ func main() {
 	})
 	mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
 
-	// Admin endpoints
+	// Api endpoints
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
@@ -99,7 +131,7 @@ func main() {
 		}
 
 		type validResponse struct {
-			Valid bool `json:"valid"`
+			Cleaned_Body string `json:"cleaned_body"`
 		}
 
 		decoder := json.NewDecoder(r.Body)
@@ -117,15 +149,17 @@ func main() {
 			return
 		}
 
+		cleaned := censorBody(chirp.Body)
+
 		respondWithJSON(w, http.StatusOK, validResponse{
-			Valid: true,
+			Cleaned_Body: cleaned,
 		})
 	})
 
 	server := &http.Server{
-		Addr: ":8080",
+		Addr:    ":8080",
 		Handler: mux,
 	}
-	// Website Serving 
+	// Website Serving
 	server.ListenAndServe()
 }
