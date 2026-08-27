@@ -9,9 +9,12 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"sivivatu/Chirpy/chirpy/internal/database"
 
+	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
@@ -37,6 +40,12 @@ func (cfg *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	cfg.fileserverHits.Store(0)
+		err := cfg.dbQuery.ResetDatabase(r.Context())
+		if err != nil {
+			log.Printf("Error resetting database: %s", err)
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
 	w.Write([]byte("Hits reset to 0"))
 }
 
@@ -83,11 +92,22 @@ func censorBody(body string) string {
 }
 
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Printf("Warning: could not load .env file: %s", err)
+	}
 
 	dbURL := os.Getenv("DB_URL")
+	if dbURL == "" {
+		log.Fatal("DB_URL environment variable is not set")
+	}
+
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
-		log.Printf("Error loading database: %s", err)
+		log.Fatalf("Error loading database: %s", err)
+	}
+	if err := db.Ping(); err != nil {
+		log.Fatalf("Error connecting to database: %s", err)
 	}
 	dbQueries := database.New(db)
 
@@ -154,6 +174,87 @@ func main() {
 		respondWithJSON(w, http.StatusOK, validResponse{
 			Cleaned_Body: cleaned,
 		})
+	})
+
+	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
+		type requestBody struct {
+			Email string `json:"email"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		user := requestBody{}
+		err := decoder.Decode(&user)
+		
+		if err != nil {
+			log.Printf("Error decoding parameters: %s", err)
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+		
+		createdUser, err := cfg.dbQuery.CreateUser(r.Context(), user.Email)
+		if err != nil {
+			log.Printf("Error creating user: %s", err)
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+
+		respondWithJSON(w, http.StatusCreated, map[string]string{
+			"id":         createdUser.ID.String(),
+			"created_at": createdUser.CreatedAt.Format(time.RFC3339),
+			"updated_at": createdUser.UpdatedAt.Format(time.RFC3339),
+			"email":      createdUser.Email,
+		})
+		
+	})
+
+
+	mux.HandleFunc("POST /api/chirps", func(w http.ResponseWriter, r *http.Request) {
+		type requestBody struct {
+			Body string `json:"body"`
+			UserID string `json:"user_id"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		chirp := requestBody{}
+		err := decoder.Decode(&chirp)
+		
+		if err != nil {
+			log.Printf("Error decoding parameters: %s", err)
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+		
+		userID, err := uuid.Parse(chirp.UserID)
+		if err != nil {
+			log.Printf("Error parsing user ID: %s", err)
+			respondWithError(w, http.StatusBadRequest, "Invalid user ID")
+			return
+		}
+
+		createdChirp, err := cfg.dbQuery.CreateChirp(r.Context(), chirp.Body, userID)
+		if err != nil {
+			log.Printf("Error creating chirp: %s", err)
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+
+		respondWithJSON(w, http.StatusCreated, map[string]string{
+			"id":         createdChirp.ID.String(),
+			"created_at": createdChirp.CreatedAt.Format(time.RFC3339),
+			"updated_at": createdChirp.UpdatedAt.Format(time.RFC3339),
+			"body":       createdChirp.Body,
+			"user_id":    createdChirp.UserID.String(),
+		})
+	})
+
+	mux.HandleFunc("GET /api/chirps", func(w http.ResponseWriter, r *http.Request) {
+		chirps, err := cfg.dbQuery.GetChirps(r.Context())
+		if err != nil {
+			log.Printf("Error getting chirps: %s", err)
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+		
 	})
 
 	server := &http.Server{
