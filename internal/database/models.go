@@ -24,3 +24,11 @@ type Chirp struct {
 	Body      string
 	UserID    uuid.UUID
 }
+
+type ChirpResponse struct {
+	ID        uuid.UUID
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Body      string
+	UserID    uuid.UUID
+}

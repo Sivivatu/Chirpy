@@ -39,7 +39,7 @@ func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
 func (cfg *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	cfg.fileserverHits.Store(0)
+		cfg.fileserverHits.Store(0)
 		err := cfg.dbQuery.ResetDatabase(r.Context())
 		if err != nil {
 			log.Printf("Error resetting database: %s", err)
@@ -207,7 +207,7 @@ func main() {
 		
 	})
 
-
+	// create a new chirp
 	mux.HandleFunc("POST /api/chirps", func(w http.ResponseWriter, r *http.Request) {
 		type requestBody struct {
 			Body string `json:"body"`
@@ -247,20 +247,63 @@ func main() {
 		})
 	})
 
+	// get all chirps
 	mux.HandleFunc("GET /api/chirps", func(w http.ResponseWriter, r *http.Request) {
 		chirps, err := cfg.dbQuery.GetChirps(r.Context())
 		if err != nil {
 			log.Printf("Error getting chirps: %s", err)
-			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			respondWithError(w, http.StatusNotFound, "Chirps not found")
 			return
 		}
+
+		type chirpResponse struct {
+			ID        string `json:"id"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+			Body      string `json:"body"`
+			UserID    string `json:"user_id"`
+		}
 		
+		resp := make([]chirpResponse, 0, len(chirps))
+		for _, chirp := range chirps {
+			resp = append(resp, chirpResponse{
+				ID:        chirp.ID.String(),
+				CreatedAt: chirp.CreatedAt.Format(time.RFC3339),
+				UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339),
+				Body:      chirp.Body,
+				UserID:    chirp.UserID.String(),
+			})
+		}
+		respondWithJSON(w, http.StatusOK, resp)
+	})
+
+	// get a single chirp
+	mux.HandleFunc("GET /api/chirps/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		chirpID, err := uuid.Parse(id)
+		if err != nil {
+			log.Printf("Error parsing chirp ID: %s", err)
+			respondWithError(w, http.StatusBadRequest, "Invalid chirp ID")
+			return
+		}
+		chirp, err := cfg.dbQuery.GetChirp(r.Context(), chirpID)
+		if err != nil {
+			log.Printf("Error getting chirp: %s", err)
+			respondWithError(w, http.StatusNotFound, "Chirp not found")
+			return
+		}
+		respondWithJSON(w, http.StatusOK, map[string]string{
+			"id":         chirp.ID.String(),
+			"created_at": chirp.CreatedAt.Format(time.RFC3339),
+			"updated_at": chirp.UpdatedAt.Format(time.RFC3339),
+			"body":       chirp.Body,
+			"user_id":    chirp.UserID.String(),
+		})
 	})
 
 	server := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
 	}
-	// Website Serving
 	server.ListenAndServe()
 }
