@@ -1,9 +1,12 @@
-.PHONY: build run dev
+.PHONY: build run dev test
 
 build:
 	go build
 
+test:
+	go test ./...
+
 run:
 	./chirpy
 
-dev: build run
+dev: build test run
