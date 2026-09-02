@@ -1,2 +1,2 @@
--- name: DeleteAllUsers :exec
+-- name: ResetDatabase :exec
 DELETE FROM users;

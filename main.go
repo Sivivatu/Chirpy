@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"sivivatu/Chirpy/chirpy/internal"
 	"sivivatu/Chirpy/chirpy/internal/database"
 
 	"github.com/google/uuid"
@@ -39,13 +40,13 @@ func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
 func (cfg *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-		cfg.fileserverHits.Store(0)
-		err := cfg.dbQuery.ResetDatabase(r.Context())
-		if err != nil {
-			log.Printf("Error resetting database: %s", err)
-			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
-			return
-		}
+	cfg.fileserverHits.Store(0)
+	err := cfg.dbQuery.ResetDatabase(r.Context())
+	if err != nil {
+		log.Printf("Error resetting database: %s", err)
+		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+		return
+	}
 	w.Write([]byte("Hits reset to 0"))
 }
 
@@ -163,7 +164,6 @@ func main() {
 			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
 			return
 		}
-
 		if len(chirp.Body) > 140 {
 			respondWithError(w, http.StatusBadRequest, "Chirp is too long")
 			return
@@ -178,20 +178,30 @@ func main() {
 
 	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
 		type requestBody struct {
-			Email string `json:"email"`
+			Email    string `json:"email"`
+			Password string `json:"password"`
 		}
 
 		decoder := json.NewDecoder(r.Body)
 		user := requestBody{}
 		err := decoder.Decode(&user)
-		
+
 		if err != nil {
 			log.Printf("Error decoding parameters: %s", err)
 			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
 			return
 		}
-		
-		createdUser, err := cfg.dbQuery.CreateUser(r.Context(), user.Email)
+		hashedPassword, err := internal.HashPassword(user.Password)
+		if err != nil {
+			log.Printf("Error hashing password: %s", err)
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+
+		createdUser, err := cfg.dbQuery.CreateUser(r.Context(), database.CreateUserParams{
+			Email:          user.Email,
+			HashedPassword: hashedPassword,
+		})
 		if err != nil {
 			log.Printf("Error creating user: %s", err)
 			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
@@ -204,26 +214,74 @@ func main() {
 			"updated_at": createdUser.UpdatedAt.Format(time.RFC3339),
 			"email":      createdUser.Email,
 		})
-		
+
+	})
+
+	// login endpoint
+	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
+		type requestBody struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+
+		type loginResponse struct {
+			ID        string `json:"id"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+			Email     string `json:"email"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		user := requestBody{}
+		err := decoder.Decode(&user)
+
+		if err != nil {
+			log.Printf("Error decoding parameters: %s", err)
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+
+		dbUser, err := cfg.dbQuery.GetUserByEmail(r.Context(), user.Email)
+		if err != nil {
+			log.Printf("Error getting user: %s", err)
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+		// if dbUser.HashedPassword == "" {
+		// 	respondWithError(w, http.StatusBadRequest, "User not found")
+		// 	return
+		// }
+
+		if !internal.CheckPasswordHash(user.Password, dbUser.HashedPassword) {
+			respondWithError(w, http.StatusUnauthorized, "Invalid password")
+			return
+		}
+
+		respondWithJSON(w, http.StatusOK, loginResponse{
+			ID:        dbUser.ID.String(),
+			CreatedAt: dbUser.CreatedAt.Format(time.RFC3339),
+			UpdatedAt: dbUser.UpdatedAt.Format(time.RFC3339),
+			Email:     dbUser.Email,
+		})
 	})
 
 	// create a new chirp
 	mux.HandleFunc("POST /api/chirps", func(w http.ResponseWriter, r *http.Request) {
 		type requestBody struct {
-			Body string `json:"body"`
+			Body   string `json:"body"`
 			UserID string `json:"user_id"`
 		}
 
 		decoder := json.NewDecoder(r.Body)
 		chirp := requestBody{}
 		err := decoder.Decode(&chirp)
-		
+
 		if err != nil {
 			log.Printf("Error decoding parameters: %s", err)
 			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
 			return
 		}
-		
+
 		userID, err := uuid.Parse(chirp.UserID)
 		if err != nil {
 			log.Printf("Error parsing user ID: %s", err)
@@ -263,7 +321,7 @@ func main() {
 			Body      string `json:"body"`
 			UserID    string `json:"user_id"`
 		}
-		
+
 		resp := make([]chirpResponse, 0, len(chirps))
 		for _, chirp := range chirps {
 			resp = append(resp, chirpResponse{
