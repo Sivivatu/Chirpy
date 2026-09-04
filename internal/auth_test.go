@@ -4,6 +4,9 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestHashPassword_returnsEncodedHash(t *testing.T) {
@@ -102,5 +105,52 @@ func TestCheckPasswordHash_isCaseSensitive(t *testing.T) {
 
 	if CheckPasswordHash(strings.ToLower(password), hash) {
 		t.Fatal("CheckPasswordHash() = true, want false for different casing")
+	}
+}
+
+func TestValidateJWT_acceptsValidToken(t *testing.T) {
+	userID := uuid.New()
+	secret := "test-secret"
+	token, err := MakeJWT(userID, secret, time.Hour)
+	if err != nil {
+		t.Fatalf("MakeJWT() error = %v", err)
+	}
+
+	gotUserID, err := ValidateJWT(token, secret)
+	if err != nil {
+		t.Fatalf("ValidateJWT() error = %v", err)
+	}
+	if gotUserID != userID {
+		t.Fatalf("ValidateJWT() user ID = %v, want %v", gotUserID, userID)
+	}
+}
+
+func TestValidateJWT_rejectsWrongSecret(t *testing.T) {
+	token, err := MakeJWT(uuid.New(), "correct-secret", time.Hour)
+	if err != nil {
+		t.Fatalf("MakeJWT() error = %v", err)
+	}
+
+	gotUserID, err := ValidateJWT(token, "wrong-secret")
+	if err == nil {
+		t.Fatal("ValidateJWT() error = nil, want an error for wrong secret")
+	}
+	if gotUserID != uuid.Nil {
+		t.Fatalf("ValidateJWT() user ID = %v, want uuid.Nil", gotUserID)
+	}
+}
+
+func TestValidateJWT_rejectsExpiredToken(t *testing.T) {
+	token, err := MakeJWT(uuid.New(), "test-secret", -time.Minute)
+	if err != nil {
+		t.Fatalf("MakeJWT() error = %v", err)
+	}
+
+	gotUserID, err := ValidateJWT(token, "test-secret")
+	if err == nil {
+		t.Fatal("ValidateJWT() error = nil, want an error for expired token")
+	}
+	if gotUserID != uuid.Nil {
+		t.Fatalf("ValidateJWT() user ID = %v, want uuid.Nil", gotUserID)
 	}
 }

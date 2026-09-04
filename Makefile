@@ -4,9 +4,12 @@ build:
 	go build
 
 test:
-	go test ./...
+	go test -v ./...
 
 run:
 	./chirpy
 
-dev: build test run
+dev:
+	@go build
+	@go test ./...
+	@./chirpy
